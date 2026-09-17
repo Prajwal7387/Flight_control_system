@@ -1,99 +1,49 @@
-import { supabase } from '../lib/supabase';
+import { getTable, insertRecord, updateRecord, deleteRecord } from '../lib/localDb';
 
-// ============================================================
-// AIRCRAFT SERVICE - CRUD operations for aircraft management
-// ============================================================
-
-/**
- * Fetch all aircraft with optional search and status filter
- */
-export async function getAircraft({ search = '', status = '' } = {}) {
-  let query = supabase.from('aircraft').select('*').order('created_at', { ascending: false });
+export const getAircraft = async ({ search = '', status = '' } = {}) => {
+  // Simulate network delay
+  await new Promise(resolve => setTimeout(resolve, 300));
+  
+  let data = getTable('aircraft');
 
   if (search) {
-    query = query.or(`registration_number.ilike.%${search}%,model.ilike.%${search}%,manufacturer.ilike.%${search}%`);
+    const s = search.toLowerCase();
+    data = data.filter(a => 
+      a.registration_number.toLowerCase().includes(s) || 
+      a.model.toLowerCase().includes(s) || 
+      a.manufacturer.toLowerCase().includes(s)
+    );
   }
+
   if (status) {
-    query = query.eq('status', status);
+    data = data.filter(a => a.status === status);
   }
 
-  const { data, error } = await query;
-  if (error) throw error;
-  return data;
-}
+  return data.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+};
 
-/**
- * Get a single aircraft by ID
- */
-export async function getAircraftById(id) {
-  const { data, error } = await supabase
-    .from('aircraft')
-    .select('*')
-    .eq('id', id)
-    .single();
-  if (error) throw error;
-  return data;
-}
+export const getAvailableAircraft = async () => {
+  return getTable('aircraft').filter(a => a.status === 'available');
+};
 
-/**
- * Create a new aircraft
- */
-export async function createAircraft(aircraft) {
-  const { data, error } = await supabase
-    .from('aircraft')
-    .insert([aircraft])
-    .select()
-    .single();
-  if (error) throw error;
-  return data;
-}
+export const createAircraft = async (aircraftData) => {
+  return insertRecord('aircraft', aircraftData);
+};
 
-/**
- * Update an existing aircraft
- */
-export async function updateAircraft(id, updates) {
-  const { data, error } = await supabase
-    .from('aircraft')
-    .update(updates)
-    .eq('id', id)
-    .select()
-    .single();
-  if (error) throw error;
-  return data;
-}
+export const updateAircraft = async (id, updates) => {
+  return updateRecord('aircraft', id, updates);
+};
 
-/**
- * Delete an aircraft
- */
-export async function deleteAircraft(id) {
-  const { error } = await supabase
-    .from('aircraft')
-    .delete()
-    .eq('id', id);
-  if (error) throw error;
-}
+export const deleteAircraft = async (id) => {
+  deleteRecord('aircraft', id);
+};
 
-/**
- * Get available aircraft (for flight scheduling)
- */
-export async function getAvailableAircraft() {
-  const { data, error } = await supabase
-    .from('aircraft')
-    .select('*')
-    .eq('status', 'available')
-    .order('registration_number');
-  if (error) throw error;
-  return data;
-}
-
-/**
- * Get aircraft count by status (for dashboard)
- */
-export async function getAircraftStats() {
-  const { data, error } = await supabase.from('aircraft').select('status');
-  if (error) throw error;
-  
-  const stats = { total: data.length, available: 0, assigned: 0, maintenance: 0, unavailable: 0 };
-  data.forEach((a) => { stats[a.status] = (stats[a.status] || 0) + 1; });
-  return stats;
-}
+export const getAircraftStats = async () => {
+  const data = getTable('aircraft');
+  return {
+    total: data.length,
+    available: data.filter(a => a.status === 'available').length,
+    maintenance: data.filter(a => a.status === 'maintenance').length,
+    assigned: data.filter(a => a.status === 'assigned').length,
+  };
+};

@@ -1,10 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useToast } from '../../context/ToastContext';
-import { supabase } from '../../lib/supabase';
+import { getTable, updateRecord } from '../../lib/localDb';
 import PageHeader from '../../components/common/PageHeader';
 import SearchFilter from '../../components/common/SearchFilter';
 import LoadingSpinner from '../../components/ui/LoadingSpinner';
-import StatusBadge from '../../components/common/StatusBadge';
 import { formatDate } from '../../utils/formatters';
 import { Shield, Users } from 'lucide-react';
 
@@ -19,11 +18,17 @@ export default function UserManagementPage() {
 
   const loadProfiles = async () => {
     try {
-      let query = supabase.from('profiles').select('*').order('created_at', { ascending: false });
-      if (search) query = query.or(`full_name.ilike.%${search}%,email.ilike.%${search}%`);
-      if (roleFilter) query = query.eq('role', roleFilter);
-      const { data, error } = await query;
-      if (error) throw error;
+      await new Promise(resolve => setTimeout(resolve, 200));
+      let data = getTable('profiles');
+      
+      if (search) {
+        const s = search.toLowerCase();
+        data = data.filter(p => p.full_name.toLowerCase().includes(s) || p.email.toLowerCase().includes(s));
+      }
+      if (roleFilter) {
+        data = data.filter(p => p.role === roleFilter);
+      }
+      
       setProfiles(data);
     } catch (error) {
       toast.error('Failed to load users');
@@ -34,8 +39,7 @@ export default function UserManagementPage() {
 
   const handleRoleChange = async (userId, newRole) => {
     try {
-      const { error } = await supabase.from('profiles').update({ role: newRole }).eq('id', userId);
-      if (error) throw error;
+      updateRecord('profiles', userId, { role: newRole });
       toast.success('User role updated');
       loadProfiles();
     } catch (error) {

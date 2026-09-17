@@ -1,80 +1,63 @@
-import { supabase } from '../lib/supabase';
+import { getTable, insertRecord, updateRecord, getDb } from '../lib/localDb';
 
-// ============================================================
-// ALERT SERVICE - Alert management and notifications
-// ============================================================
+// Helper
+const populateAlert = (alert) => {
+  const db = getDb();
+  return {
+    ...alert,
+    flight: alert.flight_id ? db.flights.find(f => f.id === alert.flight_id) : null
+  };
+};
 
-export async function getAlerts({ search = '', type = '', isRead = '' } = {}) {
-  let query = supabase
-    .from('alerts')
-    .select(`
-      *,
-      flight:flight_id (id, flight_number)
-    `)
-    .order('created_at', { ascending: false });
+export const getAlerts = async ({ search = '', type = '', isRead = '' } = {}) => {
+  await new Promise(resolve => setTimeout(resolve, 100));
+  let data = getTable('alerts');
+
+  // If there's an active user context, we could filter by user_id, 
+  // but for demo purposes we'll just show all alerts to everyone, or filter if user_id is provided in actual use.
+  const activeUser = localStorage.getItem('fcs_active_user_id');
+  if (activeUser) {
+    const userProfile = getTable('profiles').find(p => p.id === activeUser);
+    if (userProfile && userProfile.role === 'pilot') {
+      // Pilots only see their alerts
+      data = data.filter(a => a.user_id === activeUser || !a.user_id);
+    }
+  }
 
   if (search) {
-    query = query.or(`title.ilike.%${search}%,message.ilike.%${search}%`);
+    const s = search.toLowerCase();
+    data = data.filter(a => a.title.toLowerCase().includes(s) || a.message.toLowerCase().includes(s));
   }
   if (type) {
-    query = query.eq('type', type);
+    data = data.filter(a => a.type === type);
   }
   if (isRead !== '') {
-    query = query.eq('is_read', isRead === 'true');
+    const readBool = isRead === 'true' || isRead === true;
+    data = data.filter(a => a.is_read === readBool);
   }
 
-  const { data, error } = await query;
-  if (error) throw error;
-  return data;
-}
+  return data.map(populateAlert).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+};
 
-export async function createAlert(alert) {
-  const { data, error } = await supabase
-    .from('alerts')
-    .insert([alert])
-    .select()
-    .single();
-  if (error) throw error;
-  return data;
-}
+export const getRecentAlerts = async (limit = 5) => {
+  let data = getTable('alerts');
+  return data
+    .map(populateAlert)
+    .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+    .slice(0, limit);
+};
 
-export async function markAlertAsRead(id) {
-  const { data, error } = await supabase
-    .from('alerts')
-    .update({ is_read: true })
-    .eq('id', id)
-    .select()
-    .single();
-  if (error) throw error;
-  return data;
-}
+export const createAlert = async (alertData) => {
+  return insertRecord('alerts', { ...alertData, is_read: false });
+};
 
-export async function markAllAlertsAsRead() {
-  const { error } = await supabase
-    .from('alerts')
-    .update({ is_read: true })
-    .eq('is_read', false);
-  if (error) throw error;
-}
+export const markAlertAsRead = async (id) => {
+  return updateRecord('alerts', id, { is_read: true });
+};
 
-export async function getRecentAlerts(limit = 5) {
-  const { data, error } = await supabase
-    .from('alerts')
-    .select(`
-      *,
-      flight:flight_id (id, flight_number)
-    `)
-    .order('created_at', { ascending: false })
-    .limit(limit);
-  if (error) throw error;
-  return data;
-}
-
-export async function getUnreadAlertCount() {
-  const { count, error } = await supabase
-    .from('alerts')
-    .select('*', { count: 'exact', head: true })
-    .eq('is_read', false);
-  if (error) throw error;
-  return count || 0;
-}
+export const markAllAlertsAsRead = async () => {
+  const alerts = getTable('alerts');
+  alerts.forEach(a => {
+    if (!a.is_read) updateRecord('alerts', a.id, { is_read: true });
+  });
+};

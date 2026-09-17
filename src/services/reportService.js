@@ -1,120 +1,87 @@
-import { supabase } from '../lib/supabase';
+import { getTable, getDb } from '../lib/localDb';
 
-// ============================================================
-// REPORT SERVICE - Aggregate data for reports
-// ============================================================
+// Helpers to join relations for reports
+const populateFlightForReport = (f, db) => ({
+  ...f,
+  aircraft: db.aircraft.find(a => a.id === f.aircraft_id) || null,
+  pilot: db.pilots.find(p => p.id === f.pilot_id) || null,
+});
 
-/**
- * Flight report: all flights within a date range
- */
-export async function getFlightReport({ startDate, endDate } = {}) {
-  let query = supabase
-    .from('flights')
-    .select(`
-      *,
-      aircraft:aircraft_id (registration_number, model),
-      pilot:pilot_id (name, license_number),
-      route:route_id (route_name, distance_km)
-    `)
-    .order('departure_date', { ascending: false });
+const isDateInRange = (dateStr, startDate, endDate) => {
+  if (!dateStr) return false;
+  const d = new Date(dateStr);
+  const start = startDate ? new Date(startDate) : new Date(0);
+  const end = endDate ? new Date(endDate) : new Date(8640000000000000);
+  // Set end date to end of day
+  end.setHours(23, 59, 59, 999);
+  return d >= start && d <= end;
+};
 
-  if (startDate) query = query.gte('departure_date', startDate);
-  if (endDate) query = query.lte('departure_date', endDate);
+export const getFlightReport = async ({ startDate, endDate } = {}) => {
+  await new Promise(resolve => setTimeout(resolve, 300));
+  const db = getDb();
+  let flights = db.flights;
 
-  const { data, error } = await query;
-  if (error) throw error;
-  return data;
-}
+  if (startDate || endDate) {
+    flights = flights.filter(f => isDateInRange(f.departure_date, startDate, endDate));
+  }
+  
+  return flights.map(f => populateFlightForReport(f, db));
+};
 
-/**
- * Aircraft report: all aircraft with usage stats
- */
-export async function getAircraftReport() {
-  const { data: aircraft, error: aError } = await supabase
-    .from('aircraft')
-    .select('*')
-    .order('registration_number');
-  if (aError) throw aError;
-
-  const { data: flights, error: fError } = await supabase
-    .from('flights')
-    .select('aircraft_id, status');
-  if (fError) throw fError;
-
-  // Enrich aircraft with flight counts
-  return aircraft.map((a) => {
-    const flightList = flights.filter((f) => f.aircraft_id === a.id);
+export const getAircraftReport = async () => {
+  await new Promise(resolve => setTimeout(resolve, 200));
+  const db = getDb();
+  const aircraft = db.aircraft;
+  
+  return aircraft.map(a => {
+    const flightsForAircraft = db.flights.filter(f => f.aircraft_id === a.id);
     return {
       ...a,
-      total_flights: flightList.length,
-      completed_flights: flightList.filter((f) => f.status === 'completed').length,
+      total_flights: flightsForAircraft.length,
+      completed_flights: flightsForAircraft.filter(f => f.status === 'completed').length
     };
   });
-}
+};
 
-/**
- * Pilot report: all pilots with flight stats
- */
-export async function getPilotReport() {
-  const { data: pilots, error: pError } = await supabase
-    .from('pilots')
-    .select('*')
-    .order('name');
-  if (pError) throw pError;
-
-  const { data: flights, error: fError } = await supabase
-    .from('flights')
-    .select('pilot_id, status');
-  if (fError) throw fError;
-
-  return pilots.map((p) => {
-    const flightList = flights.filter((f) => f.pilot_id === p.id);
+export const getPilotReport = async () => {
+  await new Promise(resolve => setTimeout(resolve, 200));
+  const db = getDb();
+  const pilots = db.pilots;
+  
+  return pilots.map(p => {
+    const flightsForPilot = db.flights.filter(f => f.pilot_id === p.id);
     return {
       ...p,
-      total_flights: flightList.length,
-      completed_flights: flightList.filter((f) => f.status === 'completed').length,
+      total_flights: flightsForPilot.length,
+      completed_flights: flightsForPilot.filter(f => f.status === 'completed').length
     };
   });
-}
+};
 
-/**
- * Emergency report
- */
-export async function getEmergencyReport({ startDate, endDate } = {}) {
-  let query = supabase
-    .from('emergencies')
-    .select(`
-      *,
-      flight:flight_id (flight_number, source, destination)
-    `)
-    .order('reported_at', { ascending: false });
+export const getEmergencyReport = async ({ startDate, endDate } = {}) => {
+  await new Promise(resolve => setTimeout(resolve, 200));
+  const db = getDb();
+  let emergencies = db.emergencies;
 
-  if (startDate) query = query.gte('reported_at', startDate);
-  if (endDate) query = query.lte('reported_at', endDate);
+  if (startDate || endDate) {
+    emergencies = emergencies.filter(e => isDateInRange(e.reported_at, startDate, endDate));
+  }
 
-  const { data, error } = await query;
-  if (error) throw error;
-  return data;
-}
+  return emergencies.map(e => ({
+    ...e,
+    flight: db.flights.find(f => f.id === e.flight_id) || null
+  }));
+};
 
-/**
- * Schedule report: flights grouped by date
- */
-export async function getScheduleReport({ startDate, endDate } = {}) {
-  let query = supabase
-    .from('flights')
-    .select(`
-      *,
-      aircraft:aircraft_id (registration_number),
-      pilot:pilot_id (name)
-    `)
-    .order('departure_date', { ascending: true })
-    .order('departure_time', { ascending: true });
+export const getScheduleReport = async ({ startDate, endDate } = {}) => {
+  await new Promise(resolve => setTimeout(resolve, 200));
+  const db = getDb();
+  let flights = db.flights.filter(f => ['scheduled', 'delayed'].includes(f.status));
 
-  if (startDate) query = query.gte('departure_date', startDate);
-  if (endDate) query = query.lte('departure_date', endDate);
+  if (startDate || endDate) {
+    flights = flights.filter(f => isDateInRange(f.departure_date, startDate, endDate));
+  }
 
-  const { data, error } = await query;
-  if (error) throw error;
-  return data;
-}
+  return flights.map(f => populateFlightForReport(f, db)).sort((a, b) => new Date(a.departure_date) - new Date(b.departure_date));
+};

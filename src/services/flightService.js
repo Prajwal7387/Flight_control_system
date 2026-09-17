@@ -1,230 +1,117 @@
-import { supabase } from '../lib/supabase';
+import { getTable, insertRecord, updateRecord, getDb, saveDb } from '../lib/localDb';
+import { createAlert } from './alertService';
 
-// ============================================================
-// FLIGHT SERVICE - CRUD, scheduling, status management
-// ============================================================
+// Helper to join relations
+const populateFlight = (f) => {
+  const db = getDb();
+  return {
+    ...f,
+    aircraft: db.aircraft.find(a => a.id === f.aircraft_id) || null,
+    pilot: db.pilots.find(p => p.id === f.pilot_id) || null,
+    route: db.routes.find(r => r.id === f.route_id) || null,
+  };
+};
 
-/**
- * Fetch flights with optional filters. Joins aircraft, pilot, route data.
- */
-export async function getFlights({ search = '', status = '' } = {}) {
-  let query = supabase
-    .from('flights')
-    .select(`
-      *,
-      aircraft:aircraft_id (id, registration_number, model),
-      pilot:pilot_id (id, name, license_number),
-      route:route_id (id, route_name, distance_km, estimated_duration_minutes)
-    `)
-    .order('departure_date', { ascending: false });
+export const getFlights = async ({ search = '', status = '' } = {}) => {
+  await new Promise(resolve => setTimeout(resolve, 300));
+  let data = getTable('flights');
 
   if (search) {
-    query = query.or(`flight_number.ilike.%${search}%,source.ilike.%${search}%,destination.ilike.%${search}%`);
+    const s = search.toLowerCase();
+    data = data.filter(f => 
+      f.flight_number.toLowerCase().includes(s) || 
+      f.source.toLowerCase().includes(s) || 
+      f.destination.toLowerCase().includes(s)
+    );
   }
+
   if (status) {
-    query = query.eq('status', status);
+    data = data.filter(f => f.status === status);
   }
 
-  const { data, error } = await query;
-  if (error) throw error;
-  return data;
-}
+  return data.map(populateFlight).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+};
 
-/**
- * Get a single flight by ID with joined data
- */
-export async function getFlightById(id) {
-  const { data, error } = await supabase
-    .from('flights')
-    .select(`
-      *,
-      aircraft:aircraft_id (id, registration_number, model, manufacturer),
-      pilot:pilot_id (id, name, license_number, email),
-      route:route_id (id, route_name, source, destination, distance_km, estimated_duration_minutes)
-    `)
-    .eq('id', id)
-    .single();
-  if (error) throw error;
-  return data;
-}
+export const getActiveFlights = async () => {
+  const data = getTable('flights');
+  return data
+    .filter(f => !['completed', 'cancelled'].includes(f.status))
+    .map(populateFlight)
+    .sort((a, b) => new Date(a.departure_date) - new Date(b.departure_date));
+};
 
-/**
- * Create a new flight with scheduling validation
- */
-export async function createFlight(flight) {
-  // Validate aircraft availability
-  if (flight.aircraft_id) {
-    const { data: aircraft } = await supabase
-      .from('aircraft')
-      .select('status')
-      .eq('id', flight.aircraft_id)
-      .single();
-    
-    if (aircraft && aircraft.status !== 'available') {
-      throw new Error('Selected aircraft is not available for assignment.');
+export const getRecentFlights = async (limit = 5) => {
+  const data = getTable('flights');
+  return data
+    .map(populateFlight)
+    .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+    .slice(0, limit);
+};
+
+export const createFlight = async (flightData) => {
+  const flight = insertRecord('flights', flightData);
+
+  // Update resource status to 'assigned'
+  if (flightData.aircraft_id) updateRecord('aircraft', flightData.aircraft_id, { status: 'assigned' });
+  if (flightData.pilot_id) updateRecord('pilots', flightData.pilot_id, { status: 'assigned' });
+
+  // Create alert
+  if (flightData.pilot_id) {
+    const pilot = getTable('pilots').find(p => p.id === flightData.pilot_id);
+    if (pilot && pilot.profile_id) {
+      createAlert({
+        title: 'New Flight Assignment',
+        message: `You have been assigned to flight ${flight.flight_number}`,
+        type: 'assignment',
+        flight_id: flight.id,
+        user_id: pilot.profile_id
+      });
     }
   }
 
-  // Validate pilot availability
-  if (flight.pilot_id) {
-    const { data: pilot } = await supabase
-      .from('pilots')
-      .select('status')
-      .eq('id', flight.pilot_id)
-      .single();
-    
-    if (pilot && pilot.status !== 'available') {
-      throw new Error('Selected pilot is not available for assignment.');
-    }
-  }
+  return flight;
+};
 
-  // Create the flight
-  const { data, error } = await supabase
-    .from('flights')
-    .insert([flight])
-    .select()
-    .single();
-  if (error) throw error;
+export const updateFlight = async (id, updates) => {
+  return updateRecord('flights', id, updates);
+};
 
-  // Update aircraft status to assigned
-  if (flight.aircraft_id) {
-    await supabase.from('aircraft').update({ status: 'assigned' }).eq('id', flight.aircraft_id);
-  }
-
-  // Update pilot status to assigned
-  if (flight.pilot_id) {
-    await supabase.from('pilots').update({ status: 'assigned' }).eq('id', flight.pilot_id);
-  }
-
-  // Create assignment alert
-  await supabase.from('alerts').insert([{
-    title: `Flight ${flight.flight_number} Created`,
-    message: `Flight ${flight.flight_number} from ${flight.source} to ${flight.destination} has been scheduled.`,
-    type: 'assignment',
-    flight_id: data.id,
-  }]);
-
-  return data;
-}
-
-/**
- * Update a flight
- */
-export async function updateFlight(id, updates) {
-  const { data, error } = await supabase
-    .from('flights')
-    .update(updates)
-    .eq('id', id)
-    .select()
-    .single();
-  if (error) throw error;
-  return data;
-}
-
-/**
- * Update flight status with cascading effects
- */
-export async function updateFlightStatus(id, newStatus) {
-  // Get current flight info
-  const { data: flight } = await supabase
-    .from('flights')
-    .select('*, aircraft:aircraft_id(id), pilot:pilot_id(id)')
-    .eq('id', id)
-    .single();
-
+export const updateFlightStatus = async (id, status) => {
+  const flights = getTable('flights');
+  const flight = flights.find(f => f.id === id);
   if (!flight) throw new Error('Flight not found');
 
-  // Update flight status
-  const { data, error } = await supabase
-    .from('flights')
-    .update({ status: newStatus })
-    .eq('id', id)
-    .select()
-    .single();
-  if (error) throw error;
+  const updated = updateRecord('flights', id, { status });
 
-  // If flight is completed, cancelled, or landed — release aircraft and pilot
-  if (['completed', 'cancelled', 'landed'].includes(newStatus)) {
-    if (flight.aircraft_id) {
-      await supabase.from('aircraft').update({ status: 'available' }).eq('id', flight.aircraft_id);
-    }
-    if (flight.pilot_id) {
-      await supabase.from('pilots').update({ status: 'available' }).eq('id', flight.pilot_id);
-    }
+  // Free up resources if completed or cancelled
+  if (status === 'completed' || status === 'cancelled') {
+    if (flight.aircraft_id) updateRecord('aircraft', flight.aircraft_id, { status: 'available' });
+    if (flight.pilot_id) updateRecord('pilots', flight.pilot_id, { status: 'available' });
   }
 
-  // Create status change alert
-  await supabase.from('alerts').insert([{
+  // Generate alert
+  createAlert({
     title: `Flight ${flight.flight_number} Status Update`,
-    message: `Flight ${flight.flight_number} status changed to ${newStatus.replace('_', ' ')}.`,
-    type: newStatus === 'delayed' ? 'delay' : newStatus === 'cancelled' ? 'cancellation' : 'status_change',
-    flight_id: id,
-  }]);
+    message: `Status changed to ${status.replace('_', ' ')}`,
+    type: status === 'delayed' ? 'delay' : status === 'cancelled' ? 'cancellation' : 'status_change',
+    flight_id: flight.id
+  });
 
-  return data;
-}
+  return updated;
+};
 
-/**
- * Delete/cancel a flight
- */
-export async function deleteFlight(id) {
-  await updateFlightStatus(id, 'cancelled');
-}
-
-/**
- * Get flight statistics for dashboard
- */
-export async function getFlightStats() {
-  const { data, error } = await supabase.from('flights').select('status');
-  if (error) throw error;
-
-  const stats = {
+export const getFlightStats = async () => {
+  const data = getTable('flights');
+  return {
     total: data.length,
-    scheduled: 0,
-    boarding: 0,
-    ready: 0,
-    in_flight: 0,
-    delayed: 0,
-    landed: 0,
-    completed: 0,
-    cancelled: 0,
-    emergency: 0,
+    scheduled: data.filter(f => f.status === 'scheduled').length,
+    boarding: data.filter(f => f.status === 'boarding').length,
+    ready: data.filter(f => f.status === 'ready').length,
+    in_flight: data.filter(f => f.status === 'in_flight').length,
+    delayed: data.filter(f => f.status === 'delayed').length,
+    landed: data.filter(f => f.status === 'landed').length,
+    completed: data.filter(f => f.status === 'completed').length,
+    cancelled: data.filter(f => f.status === 'cancelled').length,
+    emergency: data.filter(f => f.status === 'emergency').length,
   };
-  data.forEach((f) => { stats[f.status] = (stats[f.status] || 0) + 1; });
-  return stats;
-}
-
-/**
- * Get recent flights for dashboard
- */
-export async function getRecentFlights(limit = 5) {
-  const { data, error } = await supabase
-    .from('flights')
-    .select(`
-      *,
-      aircraft:aircraft_id (registration_number, model),
-      pilot:pilot_id (name)
-    `)
-    .order('created_at', { ascending: false })
-    .limit(limit);
-  if (error) throw error;
-  return data;
-}
-
-/**
- * Get active flights for monitoring
- */
-export async function getActiveFlights() {
-  const { data, error } = await supabase
-    .from('flights')
-    .select(`
-      *,
-      aircraft:aircraft_id (id, registration_number, model),
-      pilot:pilot_id (id, name, license_number),
-      route:route_id (id, route_name)
-    `)
-    .in('status', ['scheduled', 'boarding', 'ready', 'in_flight', 'delayed', 'emergency'])
-    .order('departure_date', { ascending: true });
-  if (error) throw error;
-  return data;
-}
+};

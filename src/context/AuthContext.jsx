@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect } from 'react';
-import { supabase } from '../lib/supabase';
+import { getTable, saveDb, getDb } from '../lib/localDb';
 
 const AuthContext = createContext(null);
 
@@ -8,84 +8,55 @@ export function AuthProvider({ children }) {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Fetch the user profile from the profiles table
-  const fetchProfile = async (userId) => {
-    try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', userId)
-        .single();
-
-      if (error) throw error;
-      setProfile(data);
-    } catch (error) {
-      console.error('Error fetching profile:', error.message);
-      setProfile(null);
-    }
-  };
-
   useEffect(() => {
-    // Check for existing session
-    const getSession = async () => {
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        setUser(session?.user || null);
-        if (session?.user) {
-          await fetchProfile(session.user.id);
-        }
-      } catch (error) {
-        console.error('Session error:', error.message);
-      } finally {
-        setLoading(false);
+    // Check localStorage for an active session
+    const storedUserId = localStorage.getItem('fcs_active_user_id');
+    if (storedUserId) {
+      const profiles = getTable('profiles');
+      const foundProfile = profiles.find((p) => p.id === storedUserId);
+      if (foundProfile) {
+        setUser({ id: foundProfile.id, email: foundProfile.email });
+        setProfile(foundProfile);
+      } else {
+        localStorage.removeItem('fcs_active_user_id');
       }
-    };
-
-    getSession();
-
-    // Listen for auth state changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        setUser(session?.user || null);
-        if (session?.user) {
-          await fetchProfile(session.user.id);
-        } else {
-          setProfile(null);
-        }
-        setLoading(false);
-      }
-    );
-
-    return () => subscription.unsubscribe();
+    }
+    setLoading(false);
   }, []);
 
-  // Login with email and password
-  const login = async (email, password) => {
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-    if (error) throw error;
-    return data;
+  // Mock login: Find user by role or email
+  const login = async (role) => {
+    const profiles = getTable('profiles');
+    let targetProfile = profiles.find((p) => p.role === role);
+    
+    // Fallback if no profile for role exists
+    if (!targetProfile) {
+      targetProfile = {
+        id: `mock-${role}-${Date.now()}`,
+        full_name: `Mock ${role}`,
+        email: `mock-${role}@fcs.in`,
+        role: role,
+        created_at: new Date().toISOString()
+      };
+      const db = getDb();
+      db.profiles.push(targetProfile);
+      saveDb(db);
+    }
+
+    localStorage.setItem('fcs_active_user_id', targetProfile.id);
+    setUser({ id: targetProfile.id, email: targetProfile.email });
+    setProfile(targetProfile);
+    return targetProfile;
   };
 
-  // Logout
   const logout = async () => {
-    const { error } = await supabase.auth.signOut();
-    if (error) throw error;
+    localStorage.removeItem('fcs_active_user_id');
     setUser(null);
     setProfile(null);
   };
 
-  // Check if user has a specific role
-  const hasRole = (role) => {
-    return profile?.role === role;
-  };
-
-  // Check if user has any of the specified roles
-  const hasAnyRole = (roles) => {
-    return roles.includes(profile?.role);
-  };
+  const hasRole = (role) => profile?.role === role;
+  const hasAnyRole = (roles) => roles.includes(profile?.role);
 
   const value = {
     user,
@@ -105,9 +76,7 @@ export function AuthProvider({ children }) {
 
 export function useAuth() {
   const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
+  if (!context) throw new Error('useAuth must be used within an AuthProvider');
   return context;
 }
 

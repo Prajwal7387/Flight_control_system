@@ -1,142 +1,74 @@
-import { supabase } from '../lib/supabase';
+import { getTable, insertRecord, updateRecord, getDb } from '../lib/localDb';
+import { updateFlightStatus } from './flightService';
+import { createAlert } from './alertService';
 
-// ============================================================
-// EMERGENCY SERVICE - Emergency reporting and management
-// ============================================================
+// Helper
+const populateEmergency = (em) => {
+  const db = getDb();
+  return {
+    ...em,
+    flight: db.flights.find(f => f.id === em.flight_id) || null
+  };
+};
 
-export async function getEmergencies({ search = '', status = '' } = {}) {
-  let query = supabase
-    .from('emergencies')
-    .select(`
-      *,
-      flight:flight_id (id, flight_number, source, destination, status)
-    `)
-    .order('reported_at', { ascending: false });
+export const getEmergencies = async ({ search = '', status = '' } = {}) => {
+  await new Promise(resolve => setTimeout(resolve, 200));
+  let data = getTable('emergencies');
 
   if (search) {
-    query = query.or(`emergency_type.ilike.%${search}%,description.ilike.%${search}%`);
+    const s = search.toLowerCase();
+    data = data.filter(e => 
+      e.emergency_type.toLowerCase().includes(s) || 
+      e.description.toLowerCase().includes(s)
+    );
   }
+
   if (status) {
-    query = query.eq('status', status);
+    data = data.filter(e => e.status === status);
   }
 
-  const { data, error } = await query;
-  if (error) throw error;
-  return data;
-}
+  return data.map(populateEmergency).sort((a, b) => new Date(b.reported_at) - new Date(a.reported_at));
+};
 
-export async function getEmergencyById(id) {
-  const { data, error } = await supabase
-    .from('emergencies')
-    .select(`
-      *,
-      flight:flight_id (id, flight_number, source, destination, status,
-        aircraft:aircraft_id(registration_number, model),
-        pilot:pilot_id(name)
-      )
-    `)
-    .eq('id', id)
-    .single();
-  if (error) throw error;
-  return data;
-}
+export const getActiveEmergencies = async () => {
+  const data = getTable('emergencies');
+  return data
+    .filter(e => e.status !== 'resolved')
+    .map(populateEmergency)
+    .sort((a, b) => new Date(b.reported_at) - new Date(a.reported_at));
+};
 
-/**
- * Report a new emergency — also updates flight status and creates an alert
- */
-export async function createEmergency(emergency) {
-  // Create emergency record
-  const { data, error } = await supabase
-    .from('emergencies')
-    .insert([emergency])
-    .select()
-    .single();
-  if (error) throw error;
+export const createEmergency = async (emergencyData) => {
+  const emergency = insertRecord('emergencies', { ...emergencyData, status: 'reported', reported_at: new Date().toISOString() });
 
-  // Update flight status to emergency
+  // Update flight status to 'emergency'
   if (emergency.flight_id) {
-    await supabase
-      .from('flights')
-      .update({ status: 'emergency' })
-      .eq('id', emergency.flight_id);
-
-    // Get flight info for alert message
-    const { data: flight } = await supabase
-      .from('flights')
-      .select('flight_number, source, destination')
-      .eq('id', emergency.flight_id)
-      .single();
-
-    // Create emergency alert
-    await supabase.from('alerts').insert([{
-      title: `EMERGENCY: Flight ${flight?.flight_number || 'Unknown'}`,
-      message: `${emergency.emergency_type.replace('_', ' ')} emergency reported for flight ${flight?.flight_number} (${flight?.source} → ${flight?.destination}). ${emergency.description}`,
+    await updateFlightStatus(emergency.flight_id, 'emergency');
+    
+    // Generate critical alert
+    const db = getDb();
+    const flight = db.flights.find(f => f.id === emergency.flight_id);
+    createAlert({
+      title: `EMERGENCY on Flight ${flight?.flight_number || 'Unknown'}`,
+      message: `Type: ${emergency.emergency_type}. Description: ${emergency.description}`,
       type: 'emergency',
-      flight_id: emergency.flight_id,
-    }]);
+      flight_id: emergency.flight_id
+    });
   }
 
-  return data;
-}
+  return emergency;
+};
 
-export async function updateEmergency(id, updates) {
-  const { data, error } = await supabase
-    .from('emergencies')
-    .update(updates)
-    .eq('id', id)
-    .select()
-    .single();
-  if (error) throw error;
-  return data;
-}
+export const resolveEmergency = async (id) => {
+  const emergency = updateRecord('emergencies', id, { status: 'resolved' });
 
-/**
- * Resolve an emergency — also updates flight status back
- */
-export async function resolveEmergency(id) {
-  const { data: emergency } = await supabase
-    .from('emergencies')
-    .select('flight_id')
-    .eq('id', id)
-    .single();
-
-  const { data, error } = await supabase
-    .from('emergencies')
-    .update({ status: 'resolved' })
-    .eq('id', id)
-    .select()
-    .single();
-  if (error) throw error;
-
-  // Update flight status back to delayed (needs manual review)
-  if (emergency?.flight_id) {
-    await supabase
-      .from('flights')
-      .update({ status: 'delayed' })
-      .eq('id', emergency.flight_id);
+  // If the flight is still in emergency status, revert it to delayed
+  if (emergency.flight_id) {
+    const flight = getTable('flights').find(f => f.id === emergency.flight_id);
+    if (flight && flight.status === 'emergency') {
+      await updateFlightStatus(flight.id, 'delayed');
+    }
   }
 
-  return data;
-}
-
-export async function getActiveEmergencies() {
-  const { data, error } = await supabase
-    .from('emergencies')
-    .select(`
-      *,
-      flight:flight_id (id, flight_number, source, destination)
-    `)
-    .in('status', ['reported', 'active'])
-    .order('reported_at', { ascending: false });
-  if (error) throw error;
-  return data;
-}
-
-export async function getEmergencyStats() {
-  const { data, error } = await supabase.from('emergencies').select('status');
-  if (error) throw error;
-
-  const stats = { total: data.length, reported: 0, active: 0, resolved: 0 };
-  data.forEach((e) => { stats[e.status] = (stats[e.status] || 0) + 1; });
-  return stats;
-}
+  return emergency;
+};

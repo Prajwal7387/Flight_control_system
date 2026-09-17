@@ -1,59 +1,33 @@
-import { supabase } from '../lib/supabase';
+import { getTable, insertRecord, updateRecord, deleteRecord } from '../lib/localDb';
 
-// ============================================================
-// ROUTE SERVICE - CRUD operations for route management
-// ============================================================
-
-export async function getRoutes({ search = '' } = {}) {
-  let query = supabase.from('routes').select('*').order('route_name');
+export const getRoutes = async ({ search = '' } = {}) => {
+  await new Promise(resolve => setTimeout(resolve, 300));
+  let data = getTable('routes');
 
   if (search) {
-    query = query.or(`route_name.ilike.%${search}%,source.ilike.%${search}%,destination.ilike.%${search}%`);
+    const s = search.toLowerCase();
+    data = data.filter(r => 
+      r.route_name.toLowerCase().includes(s) || 
+      r.source.toLowerCase().includes(s) || 
+      r.destination.toLowerCase().includes(s)
+    );
   }
 
-  const { data, error } = await query;
-  if (error) throw error;
-  return data;
-}
+  return data.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+};
 
-export async function getRouteById(id) {
-  const { data, error } = await supabase
-    .from('routes')
-    .select('*')
-    .eq('id', id)
-    .single();
-  if (error) throw error;
-  return data;
-}
+export const getAllRoutes = async () => {
+  return getTable('routes').sort((a, b) => a.route_name.localeCompare(b.route_name));
+};
 
-export async function createRoute(route) {
-  const { data, error } = await supabase
-    .from('routes')
-    .insert([route])
-    .select()
-    .single();
-  if (error) throw error;
-  return data;
-}
+export const createRoute = async (routeData) => {
+  return insertRecord('routes', routeData);
+};
 
-export async function updateRoute(id, updates) {
-  const { data, error } = await supabase
-    .from('routes')
-    .update(updates)
-    .eq('id', id)
-    .select()
-    .single();
-  if (error) throw error;
-  return data;
-}
+export const updateRoute = async (id, updates) => {
+  return updateRecord('routes', id, updates);
+};
 
-export async function deleteRoute(id) {
-  const { error } = await supabase.from('routes').delete().eq('id', id);
-  if (error) throw error;
-}
-
-export async function getAllRoutes() {
-  const { data, error } = await supabase.from('routes').select('*').order('route_name');
-  if (error) throw error;
-  return data;
-}
+export const deleteRoute = async (id) => {
+  deleteRecord('routes', id);
+};
