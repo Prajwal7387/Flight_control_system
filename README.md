@@ -15,42 +15,25 @@ A comprehensive Flight Control System web application for academic demonstration
 
 ## Technology Stack
 - **Frontend**: React, Vite, Tailwind CSS v3, React Router, Lucide React
-- **Backend & Database**: Supabase (PostgreSQL, Authentication, Row Level Security)
+- **Backend & Database**: LocalStorage Mock Backend (Zero configuration required)
 - **Deployment**: Vercel
 
 ## System Architecture
-The application follows a standard client-server architecture where the React frontend communicates directly with the Supabase PostgreSQL database using the Supabase JS client. Business logic and access control are enforced via Supabase Row Level Security (RLS) policies.
+The application follows a client-side architecture where the React frontend communicates with a simulated database wrapper (`src/lib/localDb.js`) that reads and writes from the browser's `localStorage`. This allows the application to run entirely in the browser without any external backend dependencies while still persisting data across page reloads.
 
 ## Project Structure
 - `src/components/`: Reusable UI components (buttons, modals, tables)
 - `src/context/`: React context for Authentication and Toast notifications
 - `src/layouts/`: Dashboard layout with sidebar navigation
-- `src/lib/`: Supabase client initialization
+- `src/lib/`: LocalStorage database wrapper (`localDb.js`)
 - `src/pages/`: Feature pages organized by module (auth, dashboard, flights, etc.)
 - `src/routes/`: Route definitions and role-based guards
-- `src/services/`: Supabase data access layer
+- `src/services/`: Data access layer that interacts with the local database
 - `src/utils/`: Helper functions (formatting, validation, CSV export)
-- `supabase/`: SQL migrations for schema, RLS, and seed data
-
-## Supabase Setup
-1. Create a new project on [Supabase](https://supabase.com).
-2. Get your Project URL and anon key from Project Settings > API.
-3. Configure authentication to allow Email/Password sign-in.
-
-## Database Setup
-1. Open the SQL Editor in your Supabase dashboard.
-2. Run `supabase/migrations/001_schema.sql` to create tables and triggers.
-3. Run `supabase/migrations/002_rls_policies.sql` to apply security policies.
-4. *Optional*: Create some user accounts in Auth, then update profile IDs in `supabase/seed.sql` and run it for demo data.
-
-## Environment Variables
-Create a `.env` file in the root directory:
-```env
-VITE_SUPABASE_URL=your_supabase_project_url
-VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
-```
 
 ## Local Development
+To run this project locally, simply install the dependencies and start the development server:
+
 ```bash
 npm install
 npm run dev
@@ -64,19 +47,21 @@ npm run build
 ## Vercel Deployment
 This project is configured for Vercel deployment with SPA routing (`vercel.json`).
 1. Connect your GitHub repository to Vercel.
-2. Add the environment variables `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`.
-3. Vercel will automatically build and deploy.
+2. Vercel will automatically build and deploy. No environment variables are required!
 
-## User Roles
+## User Roles & Login
+The application uses a Mock Login system for easy demonstration. You do not need to register an account. Instead, simply select the role you want to demonstrate on the login page:
 - **Administrator**: Full access to all modules, including User Management.
 - **Flight Operator**: Can schedule flights, manage aircraft/pilots/routes, report emergencies, and view reports.
 - **Pilot**: Can view assigned flights, report emergencies, and read alerts.
 
 ## Testing
 - Unit tests are omitted for this academic demo.
-- Manual testing covers role-based routing, form validation, availability checks during scheduling, cascading status updates, and RLS enforcement.
+- Manual testing covers role-based routing, form validation, availability checks during scheduling, cascading status updates, and local storage persistence.
 
-## Future Improvements
-- Real-time updates using Supabase Realtime subscriptions.
-- Interactive route map visualization.
-- Email notifications via Edge Functions.
+## Factory Reset
+If you need to reset the application data back to its original state (e.g., before a presentation), you can clear the browser's Local Storage:
+1. Open Developer Tools (F12)
+2. Go to the **Application** tab (Chrome/Edge) or **Storage** tab (Firefox)
+3. Under **Local Storage**, right-click the domain and click **Clear**
+4. Refresh the page to reload the seed data.
